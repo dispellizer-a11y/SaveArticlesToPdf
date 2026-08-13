@@ -161,6 +161,11 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int,
     except PWTimeout:
         page.goto(article["url"], wait_until="domcontentloaded", timeout=nav_timeout)
 
+    # 'load' 이벤트가 떠도, 광고/추적 스크립트가 그 뒤에 비동기로 인쇄
+    # 버튼의 클릭 핸들러를 붙이는 사이트가 있다 (마이데일리 등). 그 핸들러가
+    # 붙을 시간을 조금 준다.
+    page.wait_for_timeout(1500)
+
     before_url = page.url
     print_el, matched = find_print_element(page)
 

@@ -69,9 +69,20 @@ python save_articles_to_pdf.py --excel 보도자료.xlsx
 | `--output` | PDF 저장 폴더 | `output` |
 | `--sheets` | 처리할 시트명 (콤마 구분) | 전체 시트 |
 | `--limit` | 테스트용 최대 처리 건수 | 0(전체) |
+| `--skip` | 앞에서부터 건너뛸 건수 (다른 구간 테스트용) | 0 |
 | `--delay` | 기사 간 대기 시간(초), 너무 빠르면 차단될 수 있음 | 1.5 |
 | `--headed` | 브라우저 창을 보이게 실행 | 꺼짐(headless) |
 | `--overwrite` | 기존 PDF 덮어쓰기 | 꺼짐 |
+| `--debug` | 클릭 직후 스크린샷(`output/_debug/`)과 콘솔 경고/에러를 결과 CSV에 남김 | 꺼짐 |
+
+### 대량 테스트 권장 순서
+
+1. `--limit 5 --headed` 로 몇 건 눈으로 확인
+2. `--limit 50` (또는 `--sheets` 여러 개) 정도로 언론사를 다양하게 섞어서 돌려보고,
+   `output/results.csv`에서 `status`별 건수를 확인 (`success` / `fallback_no_button` / `failed` 비율)
+3. 큰 문제가 없으면 전체 실행. `fallback_no_button`으로 나온 사이트가 많으면
+   그중 몇 개 URL을 알려주시면 탐지 규칙을 보강해 드립니다 (다만 언론사가
+   워낙 많아 100% 커버는 어려울 수 있습니다).
 
 ## 주의사항
 
