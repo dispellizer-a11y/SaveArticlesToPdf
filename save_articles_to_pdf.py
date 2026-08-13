@@ -259,6 +259,14 @@ def main():
         # 팝업 차단 자체를 꺼서 실행한다.
         browser = p.chromium.launch(headless=not args.headed, args=["--disable-popup-blocking"])
         context = browser.new_context(user_agent=USER_AGENT, locale="ko-KR")
+
+        # 광고/추적 스크립트가 자동화(봇)를 감지해서 window.open 같은 기능을
+        # 스스로 무력화하는 경우가 있다. navigator.webdriver는 Playwright가
+        # 기본으로 노출하는 가장 흔한 자동화 신호라 이것부터 감춘다.
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+        )
+
         # 컨텍스트 단위로 걸어야 인쇄 버튼이 새로 여는 팝업창에도 적용된다.
         # (page 단위로 걸면 팝업에는 적용 안 되어 실제 인쇄창이 뜬다)
         # window.print()를 완전히 빈 함수로 막으면, 실제 인쇄창은 안 뜨지만
