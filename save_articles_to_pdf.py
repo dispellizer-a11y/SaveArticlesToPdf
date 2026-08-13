@@ -130,8 +130,13 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
     2) '인쇄' 버튼을 찾아 클릭 (새 탭으로 인쇄용 페이지가 열리는 사이트도 대응)
     3) 인쇄(print) 레이아웃으로 전환된 화면을 PDF로 저장
     반환값: (status, method)
+
+    주의: window.print() 무력화 스크립트는 이 컨텍스트에서 새로 열리는 모든
+    페이지(팝업 포함)에 적용되어야 한다. page 단위로만 걸면 인쇄 버튼이
+    새 팝업창을 여는 사이트에서 그 팝업에는 적용되지 않아, 팝업이 뜨자마자
+    실제 OS 인쇄창이 열려 자동화가 멈춰버린다. main()에서 context 생성 직후
+    context.add_init_script(...)로 걸어야 한다.
     """
-    page.add_init_script("window.print = function(){ window.__printTriggered = true; };")
     try:
         page.goto(article["url"], wait_until="load", timeout=nav_timeout)
     except PWTimeout:
@@ -147,25 +152,31 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
     target_page = page
     new_page = None
     try:
+        # 클릭은 여기서 딱 한 번만 한다. 같은 탭에서 바로 페이지가 바뀌는
+        # 사이트의 경우, 클릭이 이미 성공했는데도 여기서 또 클릭하면
+        # (이미 사라진) 이전 문서 기준 버튼을 찾다 실패해서 "인쇄 버튼을
+        # 거치지 않은 것"처럼 오작동했었다.
         with context.expect_page(timeout=4000) as new_page_info:
             print_el.click(timeout=5000)
         new_page = new_page_info.value
         new_page.wait_for_load_state("load", timeout=nav_timeout)
         target_page = new_page
+        method = "print_button_popup"
     except PWTimeout:
-        # 새 탭이 안 열림 = 같은 페이지에서 처리되는 경우
+        # 새 탭이 안 열림 = 같은 페이지에서 처리된 경우 (클릭은 이미 위에서 실행됨)
         try:
-            print_el.click(timeout=5000)
-        except Exception:
-            print_el.evaluate("el => el.click()")
-        page.wait_for_timeout(800)
+            page.wait_for_load_state("load", timeout=3000)
+        except PWTimeout:
+            pass
+        page.wait_for_timeout(500)
+        method = "print_button_same_tab"
 
     render_to_pdf(target_page, out_path)
 
     if new_page is not None:
         new_page.close()
 
-    return "success", "print_button"
+    return "success", method
 
 
 def main():
@@ -205,6 +216,9 @@ def main():
 
         browser = p.chromium.launch(headless=not args.headed)
         context = browser.new_context(user_agent=USER_AGENT, locale="ko-KR")
+        # 컨텍스트 단위로 걸어야 인쇄 버튼이 새로 여는 팝업창에도 적용된다.
+        # (page 단위로 걸면 팝업에는 적용 안 되어 실제 인쇄창이 뜬다)
+        context.add_init_script("window.print = function(){ window.__printTriggered = true; };")
         page = context.new_page()
 
         for i, article in enumerate(articles, start=1):
