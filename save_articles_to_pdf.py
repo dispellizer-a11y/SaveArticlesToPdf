@@ -92,11 +92,12 @@ def read_articles(excel_path: Path, sheet_names):
 
 
 def find_print_element(page):
+    """일치한 요소와 함께, 진단용으로 '어떤 규칙으로 찾았는지'도 같이 반환한다."""
     for selector in PRINT_SELECTORS:
         try:
             locator = page.locator(selector).first
             if locator.count() > 0 and locator.is_visible():
-                return locator
+                return locator, f"selector:{selector}"
         except Exception:
             continue
 
@@ -109,12 +110,20 @@ def find_print_element(page):
             el = candidates.nth(i)
             try:
                 if el.is_visible():
-                    return el
+                    return el, "text-match"
             except Exception:
                 continue
     except Exception:
         pass
-    return None
+    return None, None
+
+
+def describe_element(locator) -> str:
+    try:
+        html = locator.evaluate("el => el.outerHTML")
+        return html[:300] if html else ""
+    except Exception:
+        return ""
 
 
 def render_to_pdf(page, out_path: Path):
@@ -129,7 +138,7 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
     1) 기사 페이지 접속
     2) '인쇄' 버튼을 찾아 클릭 (새 탭으로 인쇄용 페이지가 열리는 사이트도 대응)
     3) 인쇄(print) 레이아웃으로 전환된 화면을 PDF로 저장
-    반환값: (status, method)
+    반환값: dict(status, method, matched, before_url, final_url)
 
     주의: window.print() 무력화 스크립트는 이 컨텍스트에서 새로 열리는 모든
     페이지(팝업 포함)에 적용되어야 한다. page 단위로만 걸면 인쇄 버튼이
@@ -142,12 +151,16 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
     except PWTimeout:
         page.goto(article["url"], wait_until="domcontentloaded", timeout=nav_timeout)
 
-    print_el = find_print_element(page)
+    before_url = page.url
+    print_el, matched = find_print_element(page)
 
     if print_el is None:
         # 인쇄 버튼을 못 찾은 경우: 원문 페이지에 인쇄 스타일만 적용해서 저장 (대체 경로)
         render_to_pdf(page, out_path)
-        return "fallback_no_button", "direct_print_css"
+        return {"status": "fallback_no_button", "method": "direct_print_css",
+                "matched": "", "before_url": before_url, "final_url": page.url}
+
+    matched_html = describe_element(print_el)
 
     target_page = page
     new_page = None
@@ -172,11 +185,13 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
         method = "print_button_same_tab"
 
     render_to_pdf(target_page, out_path)
+    final_url = target_page.url
 
     if new_page is not None:
         new_page.close()
 
-    return "success", method
+    return {"status": "success", "method": method, "matched": f"{matched} | {matched_html}",
+            "before_url": before_url, "final_url": final_url}
 
 
 def main():
@@ -212,7 +227,8 @@ def main():
         writer = csv.writer(log_file)
         if write_header:
             writer.writerow(["sheet", "no", "date", "press", "title", "url",
-                              "status", "method", "output_file", "error"])
+                              "status", "method", "output_file", "before_url", "final_url",
+                              "matched_element", "error"])
 
         browser = p.chromium.launch(headless=not args.headed)
         context = browser.new_context(user_agent=USER_AGENT, locale="ko-KR")
@@ -236,13 +252,17 @@ def main():
 
             print(f"[{i}/{len(articles)}] {article['press']} - {article['title'][:40]} ...")
             try:
-                status, method = process_article(context, page, article, out_path, args.timeout)
+                result = process_article(context, page, article, out_path, args.timeout)
                 writer.writerow([article["sheet"], article["no"], article["date"], article["press"],
-                                  article["title"], article["url"], status, method, str(out_path), ""])
-                print(f"    -> {status} ({method})")
+                                  article["title"], article["url"], result["status"], result["method"],
+                                  str(out_path), result["before_url"], result["final_url"],
+                                  result["matched"], ""])
+                same_url = result["before_url"] == result["final_url"]
+                print(f"    -> {result['status']} ({result['method']}) "
+                      f"url_changed={not same_url}")
             except Exception as e:
                 writer.writerow([article["sheet"], article["no"], article["date"], article["press"],
-                                  article["title"], article["url"], "failed", "", "", str(e)])
+                                  article["title"], article["url"], "failed", "", "", "", "", "", str(e)])
                 print(f"    -> 실패: {e}")
             log_file.flush()
 
