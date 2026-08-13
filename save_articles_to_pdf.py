@@ -133,12 +133,16 @@ def render_to_pdf(page, out_path: Path):
              margin={"top": "10mm", "bottom": "10mm", "left": "10mm", "right": "10mm"})
 
 
-def process_article(context, page, article, out_path: Path, nav_timeout: int):
+POPUP_WAIT_MS = 8000
+
+
+def process_article(context, page, article, out_path: Path, nav_timeout: int,
+                     console_log=None, debug_dir: Path = None):
     """
     1) 기사 페이지 접속
     2) '인쇄' 버튼을 찾아 클릭 (새 탭으로 인쇄용 페이지가 열리는 사이트도 대응)
     3) 인쇄(print) 레이아웃으로 전환된 화면을 PDF로 저장
-    반환값: dict(status, method, matched, before_url, final_url)
+    반환값: dict(status, method, matched, before_url, final_url, notes)
 
     주의: window.print() 무력화 스크립트는 이 컨텍스트에서 새로 열리는 모든
     페이지(팝업 포함)에 적용되어야 한다. page 단위로만 걸면 인쇄 버튼이
@@ -146,6 +150,9 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
     실제 OS 인쇄창이 열려 자동화가 멈춰버린다. main()에서 context 생성 직후
     context.add_init_script(...)로 걸어야 한다.
     """
+    if console_log is not None:
+        console_log.clear()
+
     try:
         page.goto(article["url"], wait_until="load", timeout=nav_timeout)
     except PWTimeout:
@@ -158,7 +165,7 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
         # 인쇄 버튼을 못 찾은 경우: 원문 페이지에 인쇄 스타일만 적용해서 저장 (대체 경로)
         render_to_pdf(page, out_path)
         return {"status": "fallback_no_button", "method": "direct_print_css",
-                "matched": "", "before_url": before_url, "final_url": page.url}
+                "matched": "", "before_url": before_url, "final_url": page.url, "notes": ""}
 
     matched_html = describe_element(print_el)
 
@@ -169,7 +176,7 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
         # 사이트의 경우, 클릭이 이미 성공했는데도 여기서 또 클릭하면
         # (이미 사라진) 이전 문서 기준 버튼을 찾다 실패해서 "인쇄 버튼을
         # 거치지 않은 것"처럼 오작동했었다.
-        with context.expect_page(timeout=4000) as new_page_info:
+        with context.expect_page(timeout=POPUP_WAIT_MS) as new_page_info:
             print_el.click(timeout=5000)
         new_page = new_page_info.value
         new_page.wait_for_load_state("load", timeout=nav_timeout)
@@ -184,14 +191,23 @@ def process_article(context, page, article, out_path: Path, nav_timeout: int):
         page.wait_for_timeout(500)
         method = "print_button_same_tab"
 
+    if debug_dir is not None:
+        no_str = str(article.get("no", "x"))
+        try:
+            target_page.screenshot(path=str(debug_dir / f"{no_str}_after_click.png"))
+        except Exception:
+            pass
+
     render_to_pdf(target_page, out_path)
     final_url = target_page.url
 
     if new_page is not None:
         new_page.close()
 
+    notes = " | ".join(console_log) if console_log else ""
+
     return {"status": "success", "method": method, "matched": f"{matched} | {matched_html}",
-            "before_url": before_url, "final_url": final_url}
+            "before_url": before_url, "final_url": final_url, "notes": notes}
 
 
 def main():
@@ -204,6 +220,8 @@ def main():
     parser.add_argument("--timeout", type=int, default=30000, help="페이지 로딩 타임아웃(ms)")
     parser.add_argument("--headed", action="store_true", help="브라우저 창을 보이게 실행 (디버깅용)")
     parser.add_argument("--overwrite", action="store_true", help="이미 저장된 PDF도 다시 저장")
+    parser.add_argument("--debug", action="store_true",
+                         help="클릭 직후 스크린샷과 콘솔 경고/에러 메시지를 결과 CSV/파일로 남김")
     args = parser.parse_args()
 
     excel_path = Path(args.excel)
@@ -228,9 +246,18 @@ def main():
         if write_header:
             writer.writerow(["sheet", "no", "date", "press", "title", "url",
                               "status", "method", "output_file", "before_url", "final_url",
-                              "matched_element", "error"])
+                              "matched_element", "notes", "error"])
 
-        browser = p.chromium.launch(headless=not args.headed)
+        debug_dir = None
+        if args.debug:
+            debug_dir = out_root / "_debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+
+        # 자동화로 띄운 브라우저는 매번 새 프로필로 시작해서, 실제 사용해온
+        # 크롬과 달리 사이트별 팝업 허용 이력/신뢰도가 없다. 그래서 인쇄
+        # 버튼이 여는 새 창(window.open)이 조용히 차단되는 사이트가 있어
+        # 팝업 차단 자체를 꺼서 실행한다.
+        browser = p.chromium.launch(headless=not args.headed, args=["--disable-popup-blocking"])
         context = browser.new_context(user_agent=USER_AGENT, locale="ko-KR")
         # 컨텍스트 단위로 걸어야 인쇄 버튼이 새로 여는 팝업창에도 적용된다.
         # (page 단위로 걸면 팝업에는 적용 안 되어 실제 인쇄창이 뜬다)
@@ -244,7 +271,18 @@ def main():
             "try { window.dispatchEvent(new Event('beforeprint')); } catch(e) {} "
             "};"
         )
+
+        # 콘솔 경고/에러(예: "팝업이 차단되었습니다")를 잡아서 진단에 쓴다.
+        # 새로 열리는 페이지(팝업)에도 자동으로 걸리도록 컨텍스트 단위로 등록한다.
+        console_log = []
+
+        def _capture_console(msg):
+            if msg.type in ("warning", "error"):
+                console_log.append(f"[{msg.type}] {msg.text}")
+
+        context.on("page", lambda p_: p_.on("console", _capture_console))
         page = context.new_page()
+        page.on("console", _capture_console)
 
         for i, article in enumerate(articles, start=1):
             sheet_dir = out_root / article["sheet"]
@@ -261,17 +299,20 @@ def main():
 
             print(f"[{i}/{len(articles)}] {article['press']} - {article['title'][:40]} ...")
             try:
-                result = process_article(context, page, article, out_path, args.timeout)
+                result = process_article(context, page, article, out_path, args.timeout,
+                                          console_log=console_log, debug_dir=debug_dir)
                 writer.writerow([article["sheet"], article["no"], article["date"], article["press"],
                                   article["title"], article["url"], result["status"], result["method"],
                                   str(out_path), result["before_url"], result["final_url"],
-                                  result["matched"], ""])
+                                  result["matched"], result["notes"], ""])
                 same_url = result["before_url"] == result["final_url"]
                 print(f"    -> {result['status']} ({result['method']}) "
                       f"url_changed={not same_url}")
+                if result["notes"]:
+                    print(f"    콘솔 경고/에러: {result['notes']}")
             except Exception as e:
                 writer.writerow([article["sheet"], article["no"], article["date"], article["press"],
-                                  article["title"], article["url"], "failed", "", "", "", "", "", str(e)])
+                                  article["title"], article["url"], "failed", "", "", "", "", "", "", str(e)])
                 print(f"    -> 실패: {e}")
             log_file.flush()
 
