@@ -216,6 +216,7 @@ def main():
     parser.add_argument("--output", default="output", help="PDF 저장 폴더 (기본: output)")
     parser.add_argument("--sheets", default="", help="처리할 시트명 콤마 구분 (기본: 전체 시트)")
     parser.add_argument("--limit", type=int, default=0, help="테스트용 최대 처리 건수 (0=전체)")
+    parser.add_argument("--skip", type=int, default=0, help="앞에서부터 건너뛸 건수 (테스트용)")
     parser.add_argument("--delay", type=float, default=1.5, help="요청 간 대기 시간(초)")
     parser.add_argument("--timeout", type=int, default=30000, help="페이지 로딩 타임아웃(ms)")
     parser.add_argument("--headed", action="store_true", help="브라우저 창을 보이게 실행 (디버깅용)")
@@ -231,6 +232,8 @@ def main():
 
     sheet_names = [s.strip() for s in args.sheets.split(",") if s.strip()] or None
     articles = read_articles(excel_path, sheet_names)
+    if args.skip:
+        articles = articles[args.skip:]
     if args.limit:
         articles = articles[: args.limit]
 
