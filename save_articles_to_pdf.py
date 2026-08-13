@@ -234,7 +234,16 @@ def main():
         context = browser.new_context(user_agent=USER_AGENT, locale="ko-KR")
         # 컨텍스트 단위로 걸어야 인쇄 버튼이 새로 여는 팝업창에도 적용된다.
         # (page 단위로 걸면 팝업에는 적용 안 되어 실제 인쇄창이 뜬다)
-        context.add_init_script("window.print = function(){ window.__printTriggered = true; };")
+        # window.print()를 완전히 빈 함수로 막으면, 실제 인쇄창은 안 뜨지만
+        # 그 안에서 발생해야 할 beforeprint 이벤트도 같이 사라진다. 많은
+        # 사이트가 광고/메뉴를 숨기는 '인쇄 모드 전환' 로직을 이 이벤트에
+        # 걸어두기 때문에, 이벤트만 대신 발생시켜서 그 로직은 그대로 타게 한다.
+        context.add_init_script(
+            "window.print = function(){ "
+            "window.__printTriggered = true; "
+            "try { window.dispatchEvent(new Event('beforeprint')); } catch(e) {} "
+            "};"
+        )
         page = context.new_page()
 
         for i, article in enumerate(articles, start=1):
